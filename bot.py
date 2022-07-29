@@ -67,8 +67,8 @@ async def add_clock_in(user,time_in):
 
     conn.commit()
 
-async def clock_out(user, time_outs):
-    time_out = input("GIVE A  TIME PLS: ")
+async def clock_out(user, time_out):
+    #time_out = input("GIVE A  TIME PLS: ")
     #We want to convert the times to ints and find the difference
     time_in = curr.execute('select start from timecards where id=? collate nocase',(user,)).fetchone()[0]
     old_PTO = curr.execute('select pto from timecards where id=? collate nocase',(user,)).fetchone()[0]
