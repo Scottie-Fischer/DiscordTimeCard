@@ -22,7 +22,17 @@ to_zone = tz.tzlocal()
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
 
-client = discord.Client()
+intentss = discord.Intents().default()
+intentss.members = True
+intentss.presences = True
+client = discord.Client(intents = intentss)
+
+#intents = discord.Intents.default()
+#intents.members = True
+#client = commands.bot(command_prefix=',', intents = intents)
+
+#intents = discord.Intents(members = True)
+#discord.Client(intents = discord.Intents.all())
 
 #------------DB SETUP------------------
 conn = sqlite3.connect('timecards.db')
@@ -112,9 +122,9 @@ def clock_out(user, time_out):
     conn.commit()
     return (earned_PTO,new_PTO)
 
-def get_times(message):
+def get_times(datetime):
     #Get time from the message
-    datetime = message.created_at
+    #datetime = message.created_at
     
     #Convert UTC time to String
     utc_time = datetime.strftime('%H%M%S')
@@ -145,7 +155,8 @@ async def on_message(message):
         user_sending = message.author.name
        
         #Get Times from Message
-        times = get_times(message)
+        #times = get_times(message)
+        time = get_time(message.create_at)
 
         utc_time = times[0]
         loc_time = times[1]
@@ -160,8 +171,9 @@ async def on_message(message):
         user = message.author.name
         
         #Get  Times from Message
-        times = get_times(message)
-        
+        #times = get_times(message)
+        times = get_times(message.create_at)
+
         utc_time = times[0]
         loc_time = times[1]
         #-------------------------------
@@ -189,5 +201,54 @@ async def on_message(message):
                                         %PTO[0] + \
                                         ' hours of PTO, %.5f total hours PTO'\
                                         % PTO[1])
+
+
+@client.event
+async def on_member_update(before,after):
+    #print("Client changed activity")
+    befor_acts = before.activities
+    after_acts =  after.activities
+    
+    pre_check  = False
+    post_check = False
+    
+    game = discord.Activity()
+
+    for acts in after_acts:
+        if acts.type == discord.ActivityType.playing:
+            post_check = True
+            game = acts
+    
+    for acts in befor_acts:
+        if acts.type == discord.ActivityType.playing:
+            pre_check = True
+            game = acts 
+    
+    if len(befor_acts) > len(after_acts) and ((pre_check) and (not post_check)):
+        if game.name == 'Minecraft':
+            times = get_times(game.start)
+            print(after.name + " clocked out at " + times[1])
+
+        #print(after.name + " quit playing game: " + game.name)
+
+    elif (not pre_check) and (post_check):
+        if game.name == 'Minecraft':
+            times = get_times(game.start)
+            print(after.name + " clocked in at " + times[1])
+        #print(after.name + " starting game: " + game.name)
+
+
+    #all_activity = after.activities
+    #for status in all_activity:
+    #    if status.type == discord.ActivityType.playing:
+    #        print(status.name)
+    '''
+    status = all_activity[0]
+    game = all_activity[1]
+    if(game != None):
+        print("Playing Game: " + game.name)
+    else:
+        print("Stopped Playing Game")
+    '''
 
 client.run(TOKEN)
