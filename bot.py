@@ -205,7 +205,6 @@ async def on_message(message):
 
 @client.event
 async def on_member_update(before,after):
-    #print("Client changed activity")
     befor_acts = before.activities
     after_acts =  after.activities
     
@@ -229,26 +228,9 @@ async def on_member_update(before,after):
             times = get_times(game.start)
             print(after.name + " clocked out at " + times[1])
 
-        #print(after.name + " quit playing game: " + game.name)
-
     elif (not pre_check) and (post_check):
         if game.name == 'Minecraft':
             times = get_times(game.start)
             print(after.name + " clocked in at " + times[1])
-        #print(after.name + " starting game: " + game.name)
-
-
-    #all_activity = after.activities
-    #for status in all_activity:
-    #    if status.type == discord.ActivityType.playing:
-    #        print(status.name)
-    '''
-    status = all_activity[0]
-    game = all_activity[1]
-    if(game != None):
-        print("Playing Game: " + game.name)
-    else:
-        print("Stopped Playing Game")
-    '''
 
 client.run(TOKEN)
