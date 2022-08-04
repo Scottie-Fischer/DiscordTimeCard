@@ -1,7 +1,10 @@
 #------------------------------------------#
 #   Created by Scott Fischer
 #
-#   This is a project that clocks user activity and stores it in a SQL dataBase
+#   This is a project that clocks user activity 
+#   and stores it in a SQL dataBase. It then
+#   calculates PTO of hours clocked and responds
+#   to users in the same channel
 #   
 #------------------------------------------#
 
@@ -10,6 +13,7 @@ import os
 import discord
 import sqlite3
 import random
+from datetime import datetime
 from dateutil import tz
 from dotenv import load_dotenv
 from enum import Enum
@@ -27,23 +31,12 @@ intentss.members = True
 intentss.presences = True
 client = discord.Client(intents = intentss)
 
-#intents = discord.Intents.default()
-#intents.members = True
-#client = commands.bot(command_prefix=',', intents = intents)
-
-#intents = discord.Intents(members = True)
-#discord.Client(intents = discord.Intents.all())
-
 #------------DB SETUP------------------
 conn = sqlite3.connect('timecards.db')
 curr = conn.cursor()
 
 try:
-    #conn.execute('''CREATE TABLE IF NOT EXISTS TIMECARDS 
-    #            (user TEXT PRIMARY KEY,
-    #            in TEXT, out TEXT,
-    #            total_hours REAL NOT NULL,
-    #            pto REAL NOT NULL)''')
+
     conn.execute('''CREATE TABLE IF NOT EXISTS timecards
                  (id Text, start TEXT, end TEXT, total REAL, pto REAL)''')
 
@@ -57,6 +50,19 @@ prompts = open("prompts.txt",'r')
 Quotes = prompts.readlines()
 #-------------------------------------------------------
 
+
+#--------------Helper Functions-------------------------
+
+def check_db_user(user):
+    q = 'select exists (select 1 from timecards where id=? collate nocase) limit 1'
+    query = curr.execute(q,(user,))
+    
+    if query.fetchone()[0] == 1:
+        return True
+    else:
+        return False
+
+
 async def parse_message(message):
     time = ''
     for char in message:
@@ -65,23 +71,18 @@ async def parse_message(message):
 
     print(time)
 
-async def add_clock_in(user,time_in):
-    #We query if user exists
-    q = 'select exists (select 1 from timecards where id=? collate nocase) limit 1'
-    query = curr.execute(q,(user,))
-
-    if query.fetchone()[0] == 1:
+async def clock_in(user,time_in):
+    
+    if (check_db_user(user)):
         #Exists so we Update the DB instead of inserting
         conn.execute('''UPDATE timecards SET start=?  
-                    WHERE id=? collate nocase'''\
-                    ,(time_in,user))
+                    WHERE id=? collate nocase''',(time_in,user))
 
     else:
         #Does not exist so we insert new employee id
         conn.execute('''INSERT INTO timecards 
                     (id,start,total,pto) 
-                    VALUES(?,?,?,?)'''\
-                    ,(user,time_in,0,0))
+                    VALUES(?,?,?,?)''',(user,time_in,0,0))
 
     conn.commit()
 
@@ -111,9 +112,10 @@ def clock_out(user, time_out):
     new_PTO = earned_PTO + old_PTO
     
     new_total = old_total + total_hours
-    q = 'select exists (select 1 from timecards where id=? collate nocase) limit 1'
-    query = curr.execute(q,(user,))
-    if query.fetchone()[0] == 1:
+    #q = 'select exists (select 1 from timecards 
+    #where id=? collate nocase) limit 1'
+    #query = curr.execute(q,(user,))
+    if (check_db_user(user)):
         #User exists so we update Database
         curr.execute('''UPDATE timecards SET start=?,end=?,total=?,pto=? 
                      WHERE id=? collate nocase'''\
@@ -137,6 +139,12 @@ def get_times(datetime):
 
     return (utc_time,loc_time)
 
+def take_lunch(message):
+    user = message.author
+    
+
+#----------------------Event Handling----------------------------------
+
 @client.event
 async def on_ready():
     print(f'{client.user} has connected to Discord!')
@@ -146,40 +154,66 @@ async def on_message(message):
     message_low = message.content.lower();
     if message.author == client.user:
         return
+    
+    if message_low == 'lunch break':
+        take_lunch(message)
+
+    if 'fix clock' in message_low:
+        user = message.author.name
+        await message.channel.send("Sounds like an issue not an iss-me\n- Corporate")
+        numbers = ''
+        for char in message_low:
+            if char.isnumeric():
+                numbers+=char
+        
+        #have to transfer from pst to utc then store in DB
+        #+7 hours
+        loc_time = datetime.strptime(numbers,"%H%M")
+        loc_time = loc_time.replace(tzinfo=to_zone)
+        utc_time = loc_time.astimezone(from_zone).strftime('%H%M%S')
+        print('UTC: ' + utc_time)
+
+        curr.execute('''UPDATE timecards SET start=? WHERE id=? collate nocase''',(utc_time,user))
+
+        await message.channel.send("Fixing Clock_In to: " + loc_time.strftime("%H:%M:%S"))
+
+        return
+
     if ('clock in' in message_low) | ('clocking in' in message_low):
         await parse_message(message_low)
         
         user = message.author.name
  
         #Get the Sender's Name
-        user_sending = message.author.name
+        #user_sending = message.author.name
        
         #Get Times from Message
         #times = get_times(message)
-        time = get_time(message.create_at)
+        times = get_times(message.created_at)
 
         utc_time = times[0]
         loc_time = times[1]
 
         #Send a message to the channel
-        await message.channel.send(user_sending + \
-                                ', thanks for clocking in at ' + loc_time + '!')
+        msg = user + ', thanks for clocking in at ' + loc_time + '!'
+        await message.channel.send(msg)
         
         #Now we want to add the start time to the DB
-        await add_clock_in(user,utc_time)
+        await clock_in(user,utc_time)
     if ('clock out' in message_low) | ('clocking out' in message_low):
+        
         user = message.author.name
         
         #Get  Times from Message
         #times = get_times(message)
-        times = get_times(message.create_at)
+        times = get_times(message.created_at)
 
         utc_time = times[0]
         loc_time = times[1]
         #-------------------------------
 
         #Get a random motivational quote
-        indx = random.randint(0,len(Quotes))
+        indx = random.randint(0,len(Quotes)-1)
         motivation = Quotes[indx]
 
         #Removed the newline char from the string
@@ -202,9 +236,12 @@ async def on_message(message):
                                         ' hours of PTO, %.5f total hours PTO'\
                                         % PTO[1])
 
-
 @client.event
 async def on_member_update(before,after):
+    
+    if before.guild.name != 'Quarantine South':
+        return
+
     befor_acts = before.activities
     after_acts =  after.activities
     
@@ -212,6 +249,8 @@ async def on_member_update(before,after):
     post_check = False
     
     game = discord.Activity()
+    
+    user = before.name
 
     for acts in after_acts:
         if acts.type == discord.ActivityType.playing:
@@ -222,15 +261,71 @@ async def on_member_update(before,after):
         if acts.type == discord.ActivityType.playing:
             pre_check = True
             game = acts 
-    
+
     if len(befor_acts) > len(after_acts) and ((pre_check) and (not post_check)):
         if game.name == 'Minecraft':
+            
             times = get_times(game.start)
             print(after.name + " clocked out at " + times[1])
+            
+            utc_time = times[0]
+            loc_time = times[1]
 
-    elif (not pre_check) and (post_check):
+            indx = random.randint(0,len(Quotes)-1)
+            motivation = Quotes[indx]
+
+            #Removed the newline char from the string
+            motivation = motivation[:(len(motivation)-1)]
+
+            #Add times to DB and calculate PTO
+            PTO = clock_out(user,utc_time)
+
+            channels = before.guild.channels
+            general = channels[0]
+            for channel in channels:
+                if(channel.type == discord.ChannelType.text) \
+                & (channel.name == 'general'):
+                    general = channel
+
+            #Check for clocking out before clocking in
+            if((PTO[0] == 0.0) & (PTO[1] == 0.0)):
+                await general.send(user + " you must clock in first.")
+
+            else:
+                msg = user + ',clocking out at ' + loc_time \
+                    + 'already?\nRemember %s' % motivation  \
+                    + '!\n - From Corporate'
+                await general.send(msg)
+                #Send PTO message
+                msg = 'Earned %0.5f ' %PTO[0] + \
+                      ' hours of PTO, %0.5f total hours PTO' %PTO[1])
+                await general.send(msg)
+
+
+    elif len(befor_acts) < len(after_acts) and ((not pre_check) and (post_check)):
         if game.name == 'Minecraft':
+            
+            user = before.name
             times = get_times(game.start)
-            print(after.name + " clocked in at " + times[1])
+
+            utc_time = times[0]
+            loc_time = times[1]
+
+            await clock_in(user,utc_time)
+
+            msg = user + ' thanks for clocking in at ' + loc_time + '!'
+
+            channels = before.guild.channels
+            general = channels[0]
+            for channel in channels:
+                if(channel.type == discord.ChannelType.text) \
+                & (channel.name == 'general'):
+                    general = channel
+            
+            await general.send(msg)
+
+            #print("Would insert msg into: " + server)
+
+            #print(after.name + " clocked in at " + times[1])
 
 client.run(TOKEN)
