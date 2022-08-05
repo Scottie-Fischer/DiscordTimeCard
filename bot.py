@@ -99,6 +99,7 @@ def clock_out(user, time_out):
         #print('Must clock in before clocking out')
         return (0.0,0.0)
 
+
     #Extract hours, mins, and seconds from strings
     hours = abs(int(time_out[0:2]) - int(time_in[0:2]))
     mins  = abs(int(time_out[2:4]) - int(time_in[2:4]))
@@ -112,9 +113,6 @@ def clock_out(user, time_out):
     new_PTO = earned_PTO + old_PTO
     
     new_total = old_total + total_hours
-    #q = 'select exists (select 1 from timecards 
-    #where id=? collate nocase) limit 1'
-    #query = curr.execute(q,(user,))
     if (check_db_user(user)):
         #User exists so we update Database
         curr.execute('''UPDATE timecards SET start=?,end=?,total=?,pto=? 
@@ -125,9 +123,8 @@ def clock_out(user, time_out):
     return (earned_PTO,new_PTO)
 
 def get_times(datetime):
-    #Get time from the message
-    #datetime = message.created_at
-    
+    #We are give a type datetime
+
     #Convert UTC time to String
     utc_time = datetime.strftime('%H%M%S')
     
@@ -171,7 +168,6 @@ async def on_message(message):
         loc_time = datetime.strptime(numbers,"%H%M")
         loc_time = loc_time.replace(tzinfo=to_zone)
         utc_time = loc_time.astimezone(from_zone).strftime('%H%M%S')
-        print('UTC: ' + utc_time)
 
         curr.execute('''UPDATE timecards SET start=? WHERE id=? collate nocase''',(utc_time,user))
 
@@ -238,8 +234,8 @@ async def on_message(message):
 
 @client.event
 async def on_member_update(before,after):
-    
-    if before.guild.name != 'Quarantine South':
+     
+    if before.guild.name != "Quarantine South":
         return
 
     befor_acts = before.activities
@@ -249,28 +245,29 @@ async def on_member_update(before,after):
     post_check = False
     
     game = discord.Activity()
-    
     user = before.name
 
     for acts in after_acts:
         if acts.type == discord.ActivityType.playing:
             post_check = True
             game = acts
-    
+            
     for acts in befor_acts:
         if acts.type == discord.ActivityType.playing:
             pre_check = True
-            game = acts 
-
+            game = acts
+    
     if len(befor_acts) > len(after_acts) and ((pre_check) and (not post_check)):
         if game.name == 'Minecraft':
-            
-            times = get_times(game.start)
-            print(after.name + " clocked out at " + times[1])
+            #First we get the time of when event occured (now)
+            endtime = datetime.now(from_zone)
+            #Convert it to Local Time using get_times()
+            times = get_times(endtime)
             
             utc_time = times[0]
             loc_time = times[1]
 
+            #Get a random motivation message
             indx = random.randint(0,len(Quotes)-1)
             motivation = Quotes[indx]
 
@@ -292,13 +289,14 @@ async def on_member_update(before,after):
                 await general.send(user + " you must clock in first.")
 
             else:
+                #print('From func: ' + str(PTO[0]))
                 msg = user + ',clocking out at ' + loc_time \
                     + 'already?\nRemember %s' % motivation  \
                     + '!\n - From Corporate'
                 await general.send(msg)
                 #Send PTO message
                 msg = 'Earned %0.5f ' %PTO[0] + \
-                      ' hours of PTO, %0.5f total hours PTO' %PTO[1])
+                      ' hours of PTO, %0.5f total hours PTO' %PTO[1]
                 await general.send(msg)
 
 
@@ -323,9 +321,5 @@ async def on_member_update(before,after):
                     general = channel
             
             await general.send(msg)
-
-            #print("Would insert msg into: " + server)
-
-            #print(after.name + " clocked in at " + times[1])
 
 client.run(TOKEN)
