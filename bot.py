@@ -22,6 +22,8 @@ from enum import Enum
 from_zone = tz.tzutc()
 to_zone = tz.tzlocal()
 
+server_map = {}
+
 #-----------Setting Up Bot------------
 load_dotenv()
 TOKEN = os.getenv('DISCORD_TOKEN')
@@ -29,6 +31,7 @@ TOKEN = os.getenv('DISCORD_TOKEN')
 intentss = discord.Intents().default()
 intentss.members = True
 intentss.presences = True
+intentss.guilds = True
 client = discord.Client(intents = intentss)
 
 #------------DB SETUP------------------
@@ -147,6 +150,11 @@ async def on_ready():
     print(f'{client.user} has connected to Discord!')
 
 @client.event
+async def on_guild_join(new_guild):
+    #for guild in client.fetch_guild():
+    print(new_guild.name)
+
+@client.event
 async def on_message(message):
     message_low = message.content.lower();
     if message.author == client.user:
@@ -178,13 +186,10 @@ async def on_message(message):
     if ('clock in' in message_low) | ('clocking in' in message_low):
         await parse_message(message_low)
         
+        #Get the user thats sending the msg
         user = message.author.name
- 
-        #Get the Sender's Name
-        #user_sending = message.author.name
        
         #Get Times from Message
-        #times = get_times(message)
         times = get_times(message.created_at)
 
         utc_time = times[0]
@@ -201,7 +206,6 @@ async def on_message(message):
         user = message.author.name
         
         #Get  Times from Message
-        #times = get_times(message)
         times = get_times(message.created_at)
 
         utc_time = times[0]
