@@ -1,26 +1,14 @@
-#------------------------------------------#
-#   Created by Scott Fischer
-#
-#   This is a project that clocks user activity 
-#   and stores it in a SQL dataBase. It then
-#   calculates PTO of hours clocked and responds
-#   to users in the same channel
-#   
-#------------------------------------------#
-
-#Library Dependencies
-import os
 import discord
+import os
 import sqlite3
-import random
+from dotenv import load_dotenv
 from datetime import datetime
 from dateutil import tz
-from dotenv import load_dotenv
+import pytz
+import time
 from enum import Enum
 
-#Constants
-from_zone = tz.tzutc()
-to_zone = tz.tzlocal()
+from server import server_obj
 
 server_map = {}
 
@@ -34,296 +22,190 @@ intentss.presences = True
 intentss.guilds = True
 client = discord.Client(intents = intentss)
 
-#------------DB SETUP------------------
+#-----------Default DB TABLE----------------
 conn = sqlite3.connect('timecards.db')
 curr = conn.cursor()
-
 try:
+    #This table will hold the settings each server sets
+    #This is in case the bot goes down we dont want to lose info
+    conn.execute('''CREATE TABLE IF NOT EXISTS server_configs
+            (id TEXT, games TEXT, untracked_users TEXT,
+             channel TEXT, to_zone TEXT)''')
 
-    conn.execute('''CREATE TABLE IF NOT EXISTS timecards
-                 (id Text, start TEXT, end TEXT, total REAL, pto REAL)''')
+    conn.execute('''CREATE TABLE IF NOT EXISTS default_name 
+            (id TEXT, start TEXT, end TEXT, total REAL, pto REAL)''')
 
 except Exception as e:
-    print("Error in making table: " + str(e) + "\n")
-#--------------------------------------
-
-#Read from the prompts txt and fill an array with quotes
-prompts = open("prompts.txt",'r')
-
-Quotes = prompts.readlines()
-#-------------------------------------------------------
+    print("Error making default table: " + str(e))
 
 
-#--------------Helper Functions-------------------------
+def serialize(strings):
+    ser = ""
+    first = True
+    for string in strings:
+        if not first:
+            ser = ser + "_._"
+            first = False
+        ser = ser + string 
+    return ser
 
-def check_db_user(user):
-    q = 'select exists (select 1 from timecards where id=? collate nocase) limit 1'
-    query = curr.execute(q,(user,))
-    
-    if query.fetchone()[0] == 1:
-        return True
-    else:
-        return False
-
-
-async def parse_message(message):
-    time = ''
-    for char in message:
-        if char.isnumeric():
-            time += char
-
-    print(time)
-
-async def clock_in(user,time_in):
-    
-    if (check_db_user(user)):
-        #Exists so we Update the DB instead of inserting
-        conn.execute('''UPDATE timecards SET start=?  
-                    WHERE id=? collate nocase''',(time_in,user))
-
-    else:
-        #Does not exist so we insert new employee id
-        conn.execute('''INSERT INTO timecards 
-                    (id,start,total,pto) 
-                    VALUES(?,?,?,?)''',(user,time_in,0,0))
-
-    conn.commit()
-
-def clock_out(user, time_out):
-    
-    #We want to convert the times to ints and find the difference
-    time_in = curr.execute('select start from timecards where id=? collate nocase'\
-                            ,(user,)).fetchone()[0]
-    old_PTO = curr.execute('select pto from timecards where id=? collate nocase'\
-                            ,(user,)).fetchone()[0]
-    old_total = curr.execute('select total from timecards where id=? collate nocase'\
-                            ,(user,)).fetchone()[0]
-    if time_in == '-1':
-        #print('Must clock in before clocking out')
-        return (0.0,0.0)
-
-
-    #Extract hours, mins, and seconds from strings
-    hours = abs(int(time_out[0:2]) - int(time_in[0:2]))
-    mins  = abs(int(time_out[2:4]) - int(time_in[2:4]))
-    secs  = abs(int(time_out[4:6]) - int(time_in[4:6]))
-
-    #Calculate time in hours
-    total_hours = hours + (mins/60) + (secs/3600)
-    
-    #Calculate PTO using 0.062 as ratio of PTO
-    earned_PTO = (hours * 0.062) + (mins/60 * 0.062) + (secs/3600 * 0.062)
-    new_PTO = earned_PTO + old_PTO
-    
-    new_total = old_total + total_hours
-    if (check_db_user(user)):
-        #User exists so we update Database
-        curr.execute('''UPDATE timecards SET start=?,end=?,total=?,pto=? 
-                     WHERE id=? collate nocase'''\
-                     ,('-1',time_out,new_total,new_PTO,user)) 
-    
-    conn.commit()
-    return (earned_PTO,new_PTO)
-
-def get_times(datetime):
-    #We are give a type datetime
-
-    #Convert UTC time to String
-    utc_time = datetime.strftime('%H%M%S')
-    
-    #Tell UTC time it is in UTC bc it is niave to begin
-    local = datetime.replace(tzinfo=from_zone)
-    
-    #Convert UTC to local time and get string
-    loc_time = local.astimezone(to_zone).strftime("%I:%M:%S %p")
-
-    return (utc_time,loc_time)
-
-def take_lunch(message):
-    user = message.author
-    
-
-#----------------------Event Handling----------------------------------
+def deserialize(string):
+    return string.split("_._")
 
 @client.event
 async def on_ready():
-    print(f'{client.user} has connected to Discord!')
+    q = 'select exists (select 1 from server_configs' +\
+        ' where id=? collate nocase) limit 1'
+    
+    for guild in client.guilds:
+        new_server = server_obj(guild.name)
+        
+        query = conn.execute(q,(guild.name,))
+        
+        #Check if servers are in the DB
+        if query.fetchone()[0] == 1:
+            q = 'select {} from server_configs where id=? collate nocase' 
+            
+            #Get all the data from the database
+            games    = conn.execute(q.format('games'),\
+                    (guild.name,)).fetchone()[0]
+            un_users = conn.execute(q.format('untracked_users'),\
+                    (guild.name,)).fetchone()[0]
+            channel  = conn.execute(q.format('channel'),\
+                    (guild.name,)).fetchone()[0]
+            to_zone  = curr.execute(q.format('to_zone'),\
+                    (guild.name,)).fetchone()[0]
+            
+            un_users = deserialize(un_users)
+            games = deserialize(games)
+
+            print("Current tz for " + guild.name + " ->> " + to_zone)
+            to_zone = time.tzname[time.daylight]
+            new_zone = tz.gettz(to_zone)
+            
+            new_time = datetime.now().astimezone(new_zone)
+            print("Clocked at: " + new_time.strftime("%H%M%S"))
+
+            #Setup the data for the server_object
+            new_server.set_fields(games,un_users,channel,to_zone)
+            
+        else:
+            #Not in DB so we create a table for it and configs remain default
+            new_server.create_table()
+            comm = 'INSERT INTO server_configs '+\
+            '(id,games,untracked_users,channel,to_zone)'+\
+            'VALUES(?,?,?,?,?)'
+
+            users = ""
+            games = "Minecraft"
+            to_zone = (str)(time.tzname[time.daylight])
+            print("Current tz for " + guild.name + " -> " + to_zone)
+            conn.execute(comm,(guild.name,games,users,'general',to_zone))
+            conn.commit()
+
+        server_map[guild.name] = new_server
+
+    print(f'Test Version of {client.user} has connected to Discord!')
 
 @client.event
 async def on_guild_join(new_guild):
-    #for guild in client.fetch_guild():
-    print(new_guild.name)
+    new_server = server_obj(new_guild.name)
+    new_server.create_table()
+    server_map[new_guild.name] = new_server
+    print(f"Created new server: {new_guild.name}")
 
+#This will handle all the commands for the bot
+#Commands:
+#clk in         - clks user in manually
+#clk out        - clks user out manually
+#fix clk        - setting a new clk in manually
+#timezone       - tells what the guilds timezone is
+#set timezone   - sets guilds timezone
+#timezone help  - DMs the user all timezones 
+#add game       - adds a game to track for guild
+#del game       - removes a tracked game for guild
+#take lunch     - 
+#add PTO
+#sub PTO
 @client.event
 async def on_message(message):
-    message_low = message.content.lower();
-    if message.author == client.user:
+    #Basic info from the message
+    user = message.author
+    msg = message.content
+    chan = message.channel
+    time = message.created_at
+
+    #Make sure we dont respond to the bot's own msg 
+    if user == client.user:
         return
+
+    #Get the server_obj from map, will be used in most commands
+    guild = server_map[message.guild.name]
+
+    #Clock In Functionality------------------------------------------
+    if msg.startswith("$clk in"):
+        
+        #Turn utc time in server's local time
+        times = guild.get_times(time)
+        time_str = times[1].strftime("%H%M%S")      #Time formatted for DB
+        time_prt = times[1].strftime("%H:%M:%S %p") #Time formatted for print
+        guild.clock_in(user,time_str)
+
+        #Message server with response
+        await message.channel.send(user.name + " clocked in at " + time_prt)
     
-    if message_low == 'lunch break':
-        take_lunch(message)
-
-    if 'fix clock' in message_low:
-        user = message.author.name
-        await message.channel.send("Sounds like an issue not an iss-me\n- Corporate")
-        numbers = ''
-        for char in message_low:
-            if char.isnumeric():
-                numbers+=char
+    #Clock Out Functionality-----------------------------------------
+    elif msg.startswith("$clk out"):
         
-        #have to transfer from pst to utc then store in DB
-        #+7 hours
-        loc_time = datetime.strptime(numbers,"%H%M")
-        loc_time = loc_time.replace(tzinfo=to_zone)
-        utc_time = loc_time.astimezone(from_zone).strftime('%H%M%S')
-
-        curr.execute('''UPDATE timecards SET start=? WHERE id=? collate nocase''',(utc_time,user))
-
-        await message.channel.send("Fixing Clock_In to: " + loc_time.strftime("%H:%M:%S"))
-
-        return
-
-    if ('clock in' in message_low) | ('clocking in' in message_low):
-        await parse_message(message_low)
+        #Turn utc time into server's local time
+        times = guild.get_times(time)
+        time_str = times[1].strftime("%H%M%S")      #Time formatted for DB
+        time_prt = times[1].strftime("%H:%M:%S %p") #Time formatted for print
+        res = guild.clock_out(user,time_str)
         
-        #Get the user thats sending the msg
-        user = message.author.name
-       
-        #Get Times from Message
-        times = get_times(message.created_at)
-
-        utc_time = times[0]
-        loc_time = times[1]
-
-        #Send a message to the channel
-        msg = user + ', thanks for clocking in at ' + loc_time + '!'
+        #Check if clock out failed
+        msg = user.name + " clocked out: " + time_ptr
+        msg = msg + " \nEarned: {%0.5f} hours, total: {%0.5f} hours"
+        msg = msg.format(res[0],res[1])
+        
+        if res == ('-1','-1'):
+            #Failed so we update msg for error
+            msg = 'Sorry you have to clock in before you clock out'
         await message.channel.send(msg)
-        
-        #Now we want to add the start time to the DB
-        await clock_in(user,utc_time)
-    if ('clock out' in message_low) | ('clocking out' in message_low):
-        
-        user = message.author.name
-        
-        #Get  Times from Message
-        times = get_times(message.created_at)
-
-        utc_time = times[0]
-        loc_time = times[1]
-        #-------------------------------
-
-        #Get a random motivational quote
-        indx = random.randint(0,len(Quotes)-1)
-        motivation = Quotes[indx]
-
-        #Removed the newline char from the string
-        motivation = motivation[:(len(motivation)-1)]
-
-        #Add times to DB and calculate PTO
-        PTO = clock_out(user,utc_time)
-
-        #Check for clocking out before clocking in
-        if((PTO[0] == 0.0) & (PTO[1] == 0.0)):
-            await message.channel.send(user + " you must clock in first.")
-        
+    
+    #Manually Fix Clock Functionality--------------------------------
+    elif msg.startswith("$fix clk"):
+        await message.channel.send("No Functionality yet")
+    
+    elif msg.startswith("$timezone"):
+        guild = server_map[message.guild.name]
+        zone = guild.get_zone()
+        await message.channel.send("This servers timezone: " + zone)
+    
+    #Manually Set the Guild's Local Timezone-------------------------
+    elif msg.startswith("$set timezone"):
+        guild = server_map[message.guild.name]
+        zone = msg.split("$set timezone")[1][1:]
+        if guild.set_tz(zone):
+            #Was good timezone
+            timezone = pytz.timezone(zone)
+            time = datetime.now().astimezone(timezone).strftime("%H:%M:%S")
+            await chan.send("Setting timezone, current time: " + time)
         else:
-            await message.channel.send(user + ', clocking out at ' + loc_time \
-                                    + ' already?\nRemember %s' % motivation \
-                                    + '!\n - From Corporate')
-            #Send PTO message
-            await message.channel.send('Earned %.5f' \
-                                        %PTO[0] + \
-                                        ' hours of PTO, %.5f total hours PTO'\
-                                        % PTO[1])
+            await chan.send("Time zone is not valid. Please use Olson Format")
+            await chan.send("For Help use command: $timezone help")
+
+    #Help With Timezone Format---------------------------------------
+    elif msg.startswith("$timezone help"):
+        zones = ""
+        for timezone in pytz.all_timezones:
+            zones = zones + timezone + "\n"
+        await user.send(zones)
 
 @client.event
 async def on_member_update(before,after):
-     
-    if before.guild.name != "Quarantine South":
-        return
+    guild = before.guild
 
-    befor_acts = before.activities
-    after_acts =  after.activities
-    
-    pre_check  = False
-    post_check = False
-    
-    game = discord.Activity()
-    user = before.name
-
-    for acts in after_acts:
-        if acts.type == discord.ActivityType.playing:
-            post_check = True
-            game = acts
-            
-    for acts in befor_acts:
-        if acts.type == discord.ActivityType.playing:
-            pre_check = True
-            game = acts
-    
-    if len(befor_acts) > len(after_acts) and ((pre_check) and (not post_check)):
-        if game.name == 'Minecraft':
-            #First we get the time of when event occured (now)
-            endtime = datetime.now(from_zone)
-            #Convert it to Local Time using get_times()
-            times = get_times(endtime)
-            
-            utc_time = times[0]
-            loc_time = times[1]
-
-            #Get a random motivation message
-            indx = random.randint(0,len(Quotes)-1)
-            motivation = Quotes[indx]
-
-            #Removed the newline char from the string
-            motivation = motivation[:(len(motivation)-1)]
-
-            #Add times to DB and calculate PTO
-            PTO = clock_out(user,utc_time)
-
-            channels = before.guild.channels
-            general = channels[0]
-            for channel in channels:
-                if(channel.type == discord.ChannelType.text) \
-                & (channel.name == 'general'):
-                    general = channel
-
-            #Check for clocking out before clocking in
-            if((PTO[0] == 0.0) & (PTO[1] == 0.0)):
-                await general.send(user + " you must clock in first.")
-
-            else:
-                #print('From func: ' + str(PTO[0]))
-                msg = user + ',clocking out at ' + loc_time \
-                    + 'already?\nRemember %s' % motivation  \
-                    + '!\n - From Corporate'
-                await general.send(msg)
-                #Send PTO message
-                msg = 'Earned %0.5f ' %PTO[0] + \
-                      ' hours of PTO, %0.5f total hours PTO' %PTO[1]
-                await general.send(msg)
-
-
-    elif len(befor_acts) < len(after_acts) and ((not pre_check) and (post_check)):
-        if game.name == 'Minecraft':
-            
-            user = before.name
-            times = get_times(game.start)
-
-            utc_time = times[0]
-            loc_time = times[1]
-
-            await clock_in(user,utc_time)
-
-            msg = user + ' thanks for clocking in at ' + loc_time + '!'
-
-            channels = before.guild.channels
-            general = channels[0]
-            for channel in channels:
-                if(channel.type == discord.ChannelType.text) \
-                & (channel.name == 'general'):
-                    general = channel
-            
-            await general.send(msg)
+    print(before.name + " updated activity in " + guild.name)
 
 client.run(TOKEN)
