@@ -39,69 +39,22 @@ except Exception as e:
     print("Error making default table: " + str(e))
 
 
-def serialize(strings):
-    ser = ""
-    first = True
-    for string in strings:
-        if not first:
-            ser = ser + "_._"
-            first = False
-        ser = ser + string 
-    return ser
-
-def deserialize(string):
-    return string.split("_._")
-
 @client.event
 async def on_ready():
     q = 'select exists (select 1 from server_configs' +\
         ' where id=? collate nocase) limit 1'
-    
+
     for guild in client.guilds:
         new_server = server_obj(guild.name)
         
-        query = conn.execute(q,(guild.name,))
-        
         #Check if servers are in the DB
-        if query.fetchone()[0] == 1:
-            q = 'select {} from server_configs where id=? collate nocase' 
-            
-            #Get all the data from the database
-            games    = conn.execute(q.format('games'),\
-                    (guild.name,)).fetchone()[0]
-            un_users = conn.execute(q.format('untracked_users'),\
-                    (guild.name,)).fetchone()[0]
-            channel  = conn.execute(q.format('channel'),\
-                    (guild.name,)).fetchone()[0]
-            to_zone  = curr.execute(q.format('to_zone'),\
-                    (guild.name,)).fetchone()[0]
-            
-            un_users = deserialize(un_users)
-            games = deserialize(games)
-
-            print("Current tz for " + guild.name + " ->> " + to_zone)
-            to_zone = time.tzname[time.daylight]
-            new_zone = tz.gettz(to_zone)
-            
-            new_time = datetime.now().astimezone(new_zone)
-            print("Clocked at: " + new_time.strftime("%H%M%S"))
-
-            #Setup the data for the server_object
-            new_server.set_fields(games,un_users,channel,to_zone)
+        if (new_server.check_server()):
+            #We call the objects method to pull data from the DB
+            new_server.build_from_db()
             
         else:
-            #Not in DB so we create a table for it and configs remain default
+            #Not in DB so we call the objects method to create a new table
             new_server.create_table()
-            comm = 'INSERT INTO server_configs '+\
-            '(id,games,untracked_users,channel,to_zone)'+\
-            'VALUES(?,?,?,?,?)'
-
-            users = ""
-            games = "Minecraft"
-            to_zone = (str)(time.tzname[time.daylight])
-            print("Current tz for " + guild.name + " -> " + to_zone)
-            conn.execute(comm,(guild.name,games,users,'general',to_zone))
-            conn.commit()
 
         server_map[guild.name] = new_server
 
@@ -141,6 +94,11 @@ async def on_message(message):
 
     #Get the server_obj from map, will be used in most commands
     guild = server_map[message.guild.name]
+    channel = message.guild.get_channel(guild.get_channel())
+    
+    if channel == None:
+        await message.channel.send("Guild does not have a channel for the Bot")
+        return 
 
     #Clock In Functionality------------------------------------------
     if msg.startswith("$clk in"):
@@ -149,6 +107,8 @@ async def on_message(message):
         times = guild.get_times(time)
         time_str = times[1].strftime("%H%M%S")      #Time formatted for DB
         time_prt = times[1].strftime("%H:%M:%S %p") #Time formatted for print
+        
+        #Use Server_obj method to clock out user
         guild.clock_in(user,time_str)
 
         #Message server with response
@@ -176,7 +136,30 @@ async def on_message(message):
     #Manually Fix Clock Functionality--------------------------------
     elif msg.startswith("$fix clk"):
         await message.channel.send("No Functionality yet")
-    
+  
+    #Displaying what games are being tracked for the server
+    elif msg.startswith("get games"):
+        games = guild.get_games()
+
+        await channel.send("Server is tracking: " + str(games))
+
+    #Adding a Game for the server to track
+    elif msg.startswith("$add game"):
+        new_game = msg.split("$add game")[1][1:]
+        guild.add_game(new_game)
+        games = guild.get_games()
+        
+        await channel.send("Now tracking games: " + str(games))
+   
+    #Remove a Game from the Tracked Games
+    elif msg.startswith("$del game"):
+        old_game = msg.split("del game")[1][1:]
+        guild.del_game(old_game)
+        games = guild.get_Games()
+
+        await channel.send("Now tracking games: " + str(games))
+
+    #Getting Timezone from Server------------------------------------
     elif msg.startswith("$timezone"):
         guild = server_map[message.guild.name]
         zone = guild.get_zone()
